@@ -50,22 +50,35 @@ def parse_utm(part: str):
         return None
 
 def create_circle_kml(kml_obj, center_lat, center_lon, radius_m=3, name="Location"):
-    """
-    Adds a small circular polygon to KML around a center point.
-    radius_m: radius in meters
-    """
     points = []
-    num_points = 36  # smooth circle
-    for i in range(num_points):
-        angle = math.radians(float(i) / num_points * 360)
-        # convert meters to degrees approx.
+    num_points = 72  # plus élevé = cercle plus propre
+
+    for i in range(num_points + 1):  # +1 pour fermer le cercle
+        angle = math.radians(i * (360 / num_points))
+
         delta_lat = (radius_m / 111320) * math.cos(angle)
         delta_lon = (radius_m / (111320 * math.cos(math.radians(center_lat)))) * math.sin(angle)
-        points.append((center_lon + delta_lon, center_lat + delta_lat))
-    pol = kml_obj.newpolygon(name=name, outerboundaryis=points)
+
+        lat = center_lat + delta_lat
+        lon = center_lon + delta_lon
+        points.append((lon, lat))
+
+    pol = kml_obj.newpolygon(
+        name=name,
+        outerboundaryis=points
+    )
+
+    # 🔴 Contour
     pol.style.linestyle.color = simplekml.Color.red
     pol.style.linestyle.width = 2
-    pol.style.polystyle.color = simplekml.Color.changealphaint(165, simplekml.Color.red)  # 65% opacity
+
+    # 🔴 Remplissage (65 %)
+    pol.style.polystyle.color = simplekml.Color.changealphaint(
+        165, simplekml.Color.red
+    )
+    pol.style.polystyle.fill = 1
+    pol.style.polystyle.outline = 1
+
 
 # ---------------- HANDLERS ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
