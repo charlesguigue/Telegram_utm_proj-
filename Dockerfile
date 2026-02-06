@@ -9,4 +9,6 @@ COPY . .
 
 ENV PYTHONUNBUFFERED=1
 
-CMD ["python", "main.py"]
+RUN chmod +x /app/run.sh || true
+
+CMD ["./run.sh"]
