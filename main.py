@@ -1,166 +1,170 @@
 import os
-import logging
-import re
 import math
-import utm
-import simplekml
+import re
+import tempfile
 from telegram import Update
-from telegram.ext import (
-    ApplicationBuilder,
-    ContextTypes,
-    MessageHandler,
-    CommandHandler,
-    filters,
-)
+from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
-# ================= CONFIG =================
+# ======================
+# CONFIG
+# ======================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-UTM_ZONE = int(os.getenv("UTM_ZONE", "36"))
-UTM_LETTER = os.getenv("UTM_LETTER", "N")
-LOG_FILE = os.getenv("LOG_FILE", "bot_log.txt")
-KML_SHAPE = os.getenv("KML_SHAPE", "diamond").lower()  # circle | square | hexagon | diamond
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
-if not BOT_TOKEN or ":" not in BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is missing or invalid")
+KML_SHAPE = os.getenv("KML_SHAPE", "diamond").lower()
+KML_SIZE_METERS = float(os.getenv("KML_SIZE_METERS", "3"))
 
-# ================= LOGGING =================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(LOG_FILE),
-    ],
-)
+if KML_SHAPE not in ["circle", "square", "hexagon", "diamond"]:
+    KML_SHAPE = "diamond"
 
-# ================= HELPERS =================
-def parse_utm(part: str):
-    match = re.match(r"^\s*(\d+(?:\.\d+)?)[/,](\d+(?:\.\d+)?)\s*$", part)
-    if not match:
-        return None
-    try:
-        easting = float(match.group(1))
-        northing = float(match.group(2))
-        lat, lon = utm.to_latlon(easting, northing, UTM_ZONE, UTM_LETTER)
-        return lat, lon
-    except Exception:
-        return None
+# ======================
+# UTILS
+# ======================
 
+def meters_to_lat(m):
+    return m / 111_320
 
-def meters_to_deg_lat(m):
-    return m / 111320
+def meters_to_lon(m, lat):
+    return m / (111_320 * math.cos(math.radians(lat)))
 
+# ======================
+# SHAPES
+# ======================
 
-def meters_to_deg_lon(m, lat):
-    return m / (111320 * math.cos(math.radians(lat)))
+def create_circle(lat, lon, r_m, steps=36):
+    coords = []
+    for i in range(steps):
+        angle = math.radians(i * (360 / steps))
+        dlat = meters_to_lat(r_m) * math.sin(angle)
+        dlon = meters_to_lon(r_m, lat) * math.cos(angle)
+        coords.append((lon + dlon, lat + dlat))
+    coords.append(coords[0])
+    return coords
 
+def create_square(lat, lon, size):
+    dlat = meters_to_lat(size)
+    dlon = meters_to_lon(size, lat)
+    coords = [
+        (lon - dlon, lat - dlat),
+        (lon + dlon, lat - dlat),
+        (lon + dlon, lat + dlat),
+        (lon - dlon, lat + dlat),
+    ]
+    coords.append(coords[0])
+    return coords
 
-def create_shape_kml(kml, lat, lon, radius_m, name):
-    shape = KML_SHAPE
-    points = []
+def create_hexagon(lat, lon, size):
+    coords = []
+    for i in range(6):
+        angle = math.radians(60 * i)
+        dlat = meters_to_lat(size) * math.sin(angle)
+        dlon = meters_to_lon(size, lat) * math.cos(angle)
+        coords.append((lon + dlon, lat + dlat))
+    coords.append(coords[0])
+    return coords
 
-    # Définition des formes
-    if shape == "circle":
-        sides = 72
-        angles = [i * (360 / sides) for i in range(sides + 1)]
+def create_diamond(lat, lon, size):
+    dlat = meters_to_lat(size)
+    dlon = meters_to_lon(size, lat)
+    coords = [
+        (lon, lat + dlat),
+        (lon + dlon, lat),
+        (lon, lat - dlat),
+        (lon - dlon, lat),
+    ]
+    coords.append(coords[0])
+    return coords
 
-    elif shape == "hexagon":
-        angles = [i * 60 for i in range(7)]
+def generate_shape(lat, lon):
+    if KML_SHAPE == "circle":
+        return create_circle(lat, lon, KML_SIZE_METERS)
+    if KML_SHAPE == "square":
+        return create_square(lat, lon, KML_SIZE_METERS)
+    if KML_SHAPE == "hexagon":
+        return create_hexagon(lat, lon, KML_SIZE_METERS)
+    return create_diamond(lat, lon, KML_SIZE_METERS)
 
-    elif shape == "square":
-        angles = [45, 135, 225, 315, 45]
+# ======================
+# KML
+# ======================
 
-    elif shape == "diamond":
-        angles = [0, 90, 180, 270, 0]
+def generate_kml(points):
+    kml = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2">',
+        '<Document>',
+        '<Style id="shapeStyle">',
+        '<LineStyle><color>A60000FF</color><width>2</width></LineStyle>',
+        '<PolyStyle><color>A60000FF</color></PolyStyle>',
+        '</Style>'
+    ]
 
-    else:
-        angles = [i * (360 / 72) for i in range(73)]
+    for i, (lat, lon) in enumerate(points, start=1):
+        coords = generate_shape(lat, lon)
+        kml.append(f"""
+        <Placemark>
+            <name>Location {i}</name>
+            <styleUrl>#shapeStyle</styleUrl>
+            <Polygon>
+                <outerBoundaryIs>
+                    <LinearRing>
+                        <coordinates>
+                            {" ".join(f"{x},{y},0" for x, y in coords)}
+                        </coordinates>
+                    </LinearRing>
+                </outerBoundaryIs>
+            </Polygon>
+        </Placemark>
+        """)
 
-    # Construction du polygone
-    for angle in angles:
-        rad = math.radians(angle)
-        dlat = meters_to_deg_lat(radius_m) * math.cos(rad)
-        dlon = meters_to_deg_lon(radius_m, lat) * math.sin(rad)
-        points.append((lon + dlon, lat + dlat))
+    kml.append("</Document></kml>")
+    return "\n".join(kml)
 
-    pol = kml.newpolygon(
-        name=name,
-        outerboundaryis=points,
-    )
-
-    # Style
-    pol.style.linestyle.color = simplekml.Color.red
-    pol.style.linestyle.width = 2
-    pol.style.polystyle.color = simplekml.Color.changealphaint(
-        165, simplekml.Color.red
-    )
-    pol.style.polystyle.fill = 1
-    pol.style.polystyle.outline = 1
-
-
-# ================= HANDLERS =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📍 Send UTM coordinates.\n\n"
-        "Formats:\n"
-        "709997/3505054\n"
-        "709997,3505054\n\n"
-        "Multiple coordinates supported."
-    )
-
+# ======================
+# TELEGRAM HANDLER
+# ======================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        parts = re.split(r"[ \n]+", update.message.text.strip())
-        kml = simplekml.Kml()
-        results = []
-        count = 1
+    text = update.message.text.strip()
 
-        for part in parts:
-            coords = parse_utm(part)
-            if not coords:
-                continue
+    matches = re.findall(r"(\d+[\/,]\d+)", text)
+    if not matches:
+        await update.message.reply_text("❌ No valid coordinates found.")
+        return
 
-            lat, lon = coords
-            gmaps = f"https://maps.app.goo.gl/?q={lat},{lon}"
-            results.append(f"📍 Loc {count} → {gmaps}")
+    points = []
+    reply = []
 
-            create_shape_kml(
-                kml,
-                lat,
-                lon,
-                radius_m=3,
-                name=f"Loc {count}",
-            )
-            count += 1
+    for idx, m in enumerate(matches, start=1):
+        x, y = re.split("[/,]", m)
+        lat = float(y) / 100000
+        lon = float(x) / 100000
+        points.append((lat, lon))
+        reply.append(f"📍 Location {idx} -> https://maps.app.goo.gl/?q={lat},{lon}")
 
-        if not results:
-            await update.message.reply_text(
-                "❌ No valid UTM coordinates found."
-            )
-            return
+    await update.message.reply_text("\n\n".join(reply))
 
-        await update.message.reply_text("\n\n".join(results))
+    kml_content = generate_kml(points)
 
-        path = "/tmp/locations.kml"
-        kml.save(path)
-        await update.message.reply_document(open(path, "rb"))
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".kml") as f:
+        f.write(kml_content.encode("utf-8"))
+        path = f.name
 
-    except Exception:
-        logging.exception("Processing error")
-        await update.message.reply_text(
-            "⚠️ Internal error occurred."
-        )
+    await update.message.reply_document(open(path, "rb"), filename="locations.kml")
 
+# ======================
+# MAIN
+# ======================
 
-# ================= MAIN =================
 def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    logging.info(f"Bot started | KML shape = {KML_SHAPE}")
-    app.run_polling()
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN missing")
 
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    print("🤖 Bot started and running...")
+    app.run_polling()
 
 if __name__ == "__main__":
     main()
