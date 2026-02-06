@@ -1,7 +1,10 @@
 version: "3.8"
 services:
-  bot:
+  telegram-bot:
     build: .
-    restart: unless-stopped
+    container_name: telegram_bot
     env_file:
       - .env
+    restart: unless-stopped
+    volumes:
+      - ./bot_log.txt:/app/bot_log.txt
