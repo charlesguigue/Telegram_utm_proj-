@@ -1,0 +1,4 @@
+python-telegram-bot==20.6
+utm==0.7.0
+simplekml
+python-dotenv==1.0.0
