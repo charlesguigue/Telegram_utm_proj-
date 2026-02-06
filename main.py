@@ -1,214 +1,139 @@
-#!/usr/bin/env python3
-# main.py - Advanced Production Telegram Bot (refactor)
-import re
-import utm
-import logging
 import os
-from datetime import datetime
-from simplekml import Kml
+import logging
+import re
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
-from dotenv import load_dotenv
+from telegram.ext import (
+    ApplicationBuilder,
+    ContextTypes,
+    MessageHandler,
+    CommandHandler,
+    filters
+)
+import utm
+import simplekml
 
-load_dotenv()
+# ---------------- CONFIG ----------------
 
-# ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-UTM_ZONE = int(os.getenv("UTM_ZONE", "36"))
+ADMIN_ID = int(os.getenv("ADMIN_ID", 0))
+WHITELIST = {
+    int(x.strip())
+    for x in os.getenv("WHITELIST_IDS", "").split(",")
+    if x.strip().isdigit()
+}
+
+UTM_ZONE = int(os.getenv("UTM_ZONE", 36))
 UTM_LETTER = os.getenv("UTM_LETTER", "N")
 LOG_FILE = os.getenv("LOG_FILE", "bot_log.txt")
-# ==========================================
 
-if not BOT_TOKEN:
-    raise SystemExit("Missing BOT_TOKEN environment variable")
+# ---------------- LOGGING ----------------
 
-# -------- Logging --------
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler(LOG_FILE)
+    ]
+)
 
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+# ---------------- HELPERS ----------------
 
-# File handler
-fh = logging.FileHandler(LOG_FILE)
-fh.setLevel(logging.INFO)
-fh.setFormatter(formatter)
-logger.addHandler(fh)
-
-# Stream handler (stdout)
-sh = logging.StreamHandler()
-sh.setLevel(logging.INFO)
-sh.setFormatter(formatter)
-logger.addHandler(sh)
-
-# -------- Parsing Functions --------
-
-def parse_utm_slash(line):
-    try:
-        e, n = line.split("/")
-        return float(e.strip()), float(n.strip())
-    except Exception:
-        return None
+def is_allowed(user_id: int) -> bool:
+    return user_id in WHITELIST or user_id == ADMIN_ID
 
 
-def parse_utm_space(line):
-    try:
-        parts = line.split()
-        if len(parts) == 2:
-            return float(parts[0]), float(parts[1])
-    except Exception:
-        return None
+async def notify_admin(context, msg: str):
+    if ADMIN_ID:
+        await context.bot.send_message(chat_id=ADMIN_ID, text=msg)
 
 
-def parse_wgs84(line):
-    try:
-        if "," in line:
-            lat, lon = line.split(",")
-            return float(lat.strip()), float(lon.strip())
-    except Exception:
-        return None
+def parse_coordinates(text: str):
+    text = text.strip()
 
+    # Google Maps link
+    gm = re.search(r"@(-?\d+\.\d+),(-?\d+\.\d+)", text)
+    if gm:
+        return float(gm.group(1)), float(gm.group(2))
 
-def parse_google_maps(line):
-    try:
-        m = re.search(r"q=([-0-9.]+),([-0-9.]+)", line)
-        if m:
-            return float(m.group(1)), float(m.group(2))
-    except Exception:
-        return None
+    # Lat Lon
+    ll = re.search(r"(-?\d+\.\d+)[,\s]+(-?\d+\.\d+)", text)
+    if ll:
+        return float(ll.group(1)), float(ll.group(2))
 
+    # UTM
+    utm_match = re.search(r"(\d{6})\s+(\d{7})", text)
+    if utm_match:
+        easting = float(utm_match.group(1))
+        northing = float(utm_match.group(2))
+        lat, lon = utm.to_latlon(
+            easting,
+            northing,
+            UTM_ZONE,
+            UTM_LETTER
+        )
+        return lat, lon
 
-# -------- Conversion --------
+    return None
 
-def utm_to_latlon(easting, northing):
-    return utm.to_latlon(easting, northing, UTM_ZONE, UTM_LETTER)
+# ---------------- HANDLERS ----------------
 
-
-# -------- KML --------
-
-def create_kml(points):
-    kml = Kml()
-    for name, lat, lon in points:
-        kml.newpoint(name=name, coords=[(lon, lat)])
-
-    filename = f"locations_{int(datetime.now().timestamp())}.kml"
-    kml.save(filename)
-    return filename
-
-
-# -------- Notifications --------
-
-async def notify_admin(context, message):
-    try:
-        if ADMIN_ID:
-            await context.bot.send_message(chat_id=ADMIN_ID, text=message)
-    except Exception as e:
-        logging.error(f"Admin notification failed: {e}")
-
-
-# -------- Main Handler --------
-
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user = update.effective_user
-    username = user.username if user.username else user.first_name
-    user_id = user.id
-
-    if not update.message or not update.message.text:
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_allowed(update.effective_user.id):
+        await update.message.reply_text("⛔ Accès refusé")
         return
 
-    text = update.message.text
-    lines = text.splitlines()
+    await update.message.reply_text(
+        "📍 Envoie-moi des coordonnées (UTM / LatLon / Google Maps)"
+    )
 
-    logging.info(f"Message from {username} ({user_id})")
 
-    results = []
-    kml_points = []
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
 
-    counter = 1
+    if not is_allowed(user.id):
+        await update.message.reply_text("⛔ Utilisateur non autorisé")
+        return
 
     try:
+        coords = parse_coordinates(update.message.text)
 
-        for line in lines:
+        if not coords:
+            await update.message.reply_text("❌ Coordonnées non reconnues")
+            return
 
-            line = line.strip()
-            if not line:
-                continue
+        lat, lon = coords
+        gmaps = f"https://www.google.com/maps?q={lat},{lon}"
 
-            latlon = None
+        # KML
+        kml = simplekml.Kml()
+        kml.newpoint(name="Point", coords=[(lon, lat)])
+        kml_path = "/tmp/location.kml"
+        kml.save(kml_path)
 
-            utm_slash = parse_utm_slash(line)
-            utm_space = parse_utm_space(line)
-            wgs = parse_wgs84(line)
-            gmaps = parse_google_maps(line)
-
-            if utm_slash:
-                latlon = utm_to_latlon(*utm_slash)
-
-            elif utm_space:
-                latlon = utm_to_latlon(*utm_space)
-
-            elif wgs:
-                latlon = wgs
-
-            elif gmaps:
-                latlon = gmaps
-
-            if latlon:
-                lat, lon = latlon
-                link = f"https://www.google.com/maps?q={lat},{lon}"
-
-                name = f"איתור {counter}"
-
-                results.append(f"{name} -> {link}")
-                kml_points.append((name, lat, lon))
-
-                counter += 1
-
-        if results:
-
-            header = f"📍 Results for @{username}\n\n"
-            await update.message.reply_text(header + "\n".join(results))
-
-            kml_file = create_kml(kml_points)
-
-            with open(kml_file, "rb") as f:
-                await update.message.reply_document(f)
-
-            os.remove(kml_file)
-
-            await notify_admin(
-                context,
-                f"✅ Processed {len(results)} locations from @{username} ({user_id})"
-            )
-
-        else:
-            await update.message.reply_text("לא נמצאו קואורדינטות תקינות")
-            await notify_admin(
-                context,
-                f"⚠️ No valid coordinates from @{username} ({user_id})"
-            )
+        await update.message.reply_text(f"📍 {lat}, {lon}\n🌍 {gmaps}")
+        await update.message.reply_document(open(kml_path, "rb"))
 
     except Exception as e:
-        logging.error(str(e))
-        await update.message.reply_text("❌ שגיאה בעיבוד הנתונים")
+        logging.exception("Erreur traitement message")
+        await update.message.reply_text("⚠️ Erreur interne")
         await notify_admin(
             context,
-            f"❌ ERROR from @{username} ({user_id})\n{str(e)}"
+            f"❌ ERREUR\nUser: @{user.username}\n{str(e)}"
         )
 
 
-# -------- Bot Start --------
+# ---------------- MAIN ----------------
 
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logging.info("Bot Started")
-    print("Bot Running...")
-
+    logging.info("🤖 Bot démarré")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
