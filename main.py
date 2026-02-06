@@ -1,6 +1,7 @@
 import os
 import logging
 import re
+import math
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 import utm
@@ -48,6 +49,24 @@ def parse_utm(part: str):
     except Exception:
         return None
 
+def create_circle_kml(kml_obj, center_lat, center_lon, radius_m=3, name="Location"):
+    """
+    Adds a small circular polygon to KML around a center point.
+    radius_m: radius in meters
+    """
+    points = []
+    num_points = 36  # smooth circle
+    for i in range(num_points):
+        angle = math.radians(float(i) / num_points * 360)
+        # convert meters to degrees approx.
+        delta_lat = (radius_m / 111320) * math.cos(angle)
+        delta_lon = (radius_m / (111320 * math.cos(math.radians(center_lat)))) * math.sin(angle)
+        points.append((center_lon + delta_lon, center_lat + delta_lat))
+    pol = kml_obj.newpolygon(name=name, outerboundaryis=points)
+    pol.style.linestyle.color = simplekml.Color.red
+    pol.style.linestyle.width = 2
+    pol.style.polystyle.color = simplekml.Color.changealphaint(165, simplekml.Color.red)  # 65% opacity
+
 # ---------------- HANDLERS ----------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_allowed(update.effective_user.id):
@@ -76,11 +95,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 lat, lon = coords
                 gmaps = f"https://maps.app.goo.gl/?q={lat},{lon}"
                 results.append(f"📍 Location {count} -> {gmaps}")
-                kml.newpoint(name=f"Location {count}", coords=[(lon, lat)])
+                create_circle_kml(kml, lat, lon, radius_m=3, name=f"Location {count}")
                 count += 1
 
         if not results:
-            await update.message.reply_text("❌ No valid coordinates found. Please use easting/northing format (e.g., 709997/3505054).")
+            await update.message.reply_text(
+                "❌ No valid coordinates found. Please use easting/northing format (e.g., 709997/3505054)."
+            )
             return
 
         # Send list of links
