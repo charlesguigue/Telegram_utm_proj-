@@ -125,14 +125,10 @@ async def handle_option(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if user_choice == "UTM":
         await update.message.reply_text("Please send your UTM coordinates.")
-
     elif user_choice == "GWS84":
         await update.message.reply_text("Please send your WGS84 coordinates.")
-        # Logic to handle WGS84 inputs can be added here.
-
     elif user_choice == "Google Maps":
         await update.message.reply_text("Please send your Google Maps link or address.")
-        # Logic to handle Google Maps inputs can be added here.
 
 async def handle_utm_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
@@ -151,7 +147,7 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_option))
-    app.add_handler(MessageHandler(filters.TEXT & filters.regex('^UTM$'), handle_utm_message))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex('^UTM$'), handle_utm_message))  # Corrected line
 
     logging.info("Bot started successfully")
     app.run_polling()
