@@ -3,7 +3,7 @@ import logging
 import re
 import math
 import simplekml
-from telegram import Update
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -15,8 +15,6 @@ from telegram.ext import (
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-UTM_ZONE = int(os.getenv("UTM_ZONE", "36"))
-UTM_LETTER = os.getenv("UTM_LETTER", "N")
 LOG_FILE = os.getenv("LOG_FILE", "bot_log.txt")
 
 if not BOT_TOKEN or ":" not in BOT_TOKEN:
@@ -41,9 +39,9 @@ def parse_utm(line):
 
     easting = float(m.group(1))
     northing = float(m.group(2))
-    name = line.split('-')[0].strip() or "UTM"  # Extract name if available
+    name = line.split('-')[0].strip() or "UTM"
 
-    zone_number = 36  # Adjust this as necessary
+    zone_number = 36  # Adjust this if necessary
     northern_hemisphere = True
 
     a = 6378137.0  # Equatorial radius in meters
@@ -66,7 +64,7 @@ def parse_utm(line):
     Q = (easting - 500000) / (a * k0)
     lon = (zone_number * 6 - 183) + (Q / (1 - C)) * (1 / math.cos(lat))
 
-    return lat * (180 / math.pi), lon * (180 / math.pi), name  # Convert radians to degrees
+    return lat * (180 / math.pi), lon * (180 / math.pi), name
 
 def create_circle_kml(kml_obj, center_lat, center_lon, radius_m=3, name="Loc"):
     """Create a circle in a KML object."""
@@ -112,66 +110,48 @@ def create_diamond_kml(kml_obj, center_lat, center_lon, size_m=3, name="Diamond"
 
 # ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [
+        [KeyboardButton("UTM"), KeyboardButton("GWS84"), KeyboardButton("Google Maps")]
+    ]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+
     await update.message.reply_text(
-        "📍 Send UTM coordinates.\n\n"
-        "Supported formats:\n"
-        "709997/3505054\n"
-        "709997,3505054\n\n"
-        "You can send multiple coordinates separated by spaces or lines."
+        "Welcome! Please choose an option below:",
+        reply_markup=reply_markup
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        text = update.message.text.strip()
-        parts = re.split(r"[ \n]+", text)
-        kml = simplekml.Kml()
-        results = []
-        unnamed_count = 1  # Counter for unnamed coordinates
+async def handle_option(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_choice = update.message.text
 
-        for part in parts:
-            coords = parse_utm(part)
-            if not coords:
-                continue
+    if user_choice == "UTM":
+        await update.message.reply_text("Please send your UTM coordinates.")
 
-            lat, lon, name = coords
+    elif user_choice == "GWS84":
+        await update.message.reply_text("Please send your WGS84 coordinates.")
+        # Logic to handle WGS84 inputs can be added here.
 
-            # If name is "UTM", assign a default name
-            if name == "UTM":
-                name = f"Loc {unnamed_count}"
-                unnamed_count += 1  # Increment the counter
+    elif user_choice == "Google Maps":
+        await update.message.reply_text("Please send your Google Maps link or address.")
+        # Logic to handle Google Maps inputs can be added here.
 
-            gmaps = f"https://www.google.com/maps?q={lat},{lon}"
+async def handle_utm_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text.strip()
+    coords = parse_utm(text)
 
-            # Add the formatted response to the list
-            results.append(f"📍 {name} → {gmaps}")
-            create_circle_kml(kml, lat, lon, radius_m=3, name=name)
-            create_diamond_kml(kml, lat, lon, size_m=3, name=f"Diamond {len(results)}")
+    if not coords:
+        await update.message.reply_text("❌ Invalid UTM coordinates format. Please try again.")
+        return
 
-        if not results:
-            await update.message.reply_text(
-                "❌ No valid UTM points found.\n"
-                "Please use easting/northing with / or ,."
-            )
-            return
-
-        # Respond with all the results
-        await update.message.reply_text("\n\n".join(results))
-
-        kml_path = "/tmp/locations.kml"
-        kml.save(kml_path)
-        await update.message.reply_document(open(kml_path, "rb"))
-
-    except Exception as e:
-        logging.exception("Processing error: %s", str(e))
-        await update.message.reply_text(
-            "⚠️ An internal error occurred while processing your message."
-        )
+    lat, lon, name = coords
+    gmaps = f"https://www.google.com/maps?q={lat},{lon}"
+    await update.message.reply_text(f"📍 {name} → {gmaps}")
 
 # ================= MAIN =================
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_option))
+    app.add_handler(MessageHandler(filters.TEXT & filters.regex('^UTM$'), handle_utm_message))
 
     logging.info("Bot started successfully")
     app.run_polling()
