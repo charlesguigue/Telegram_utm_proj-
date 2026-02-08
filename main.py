@@ -34,22 +34,53 @@ logging.basicConfig(
 )
 
 # ================= HELPERS =================
-def parse_utm(part: str):
-    """
-    Accepts:
-    - 709997/3505054
-    - 709997,3505054
-    """
-    match = re.match(r"^\s*(\d+(?:\.\d+)?)[/,](\d+(?:\.\d+)?)\s*$", part)
-    if not match:
+import re
+import math
+
+def parse_utm(line):
+    m = re.match(r"\s*(\d+\.?\d*),\s*(\d+\.?\d*);?([^\s]+)?\s*$", line)
+    if not m:
         return None
-    try:
-        easting = float(match.group(1))
-        northing = float(match.group(2))
-        lat, lon = utm.to_latlon(easting, northing, UTM_ZONE, UTM_LETTER)
-        return lat, lon
-    except Exception:
-        return None
+
+    easting = float(m.group(1))
+    northing = float(m.group(2))
+    name = m.group(3) or "UTM"
+
+    # Zone UTM pour Israël, Zone 36N
+    zone_number = 36
+    northern_hemisphere = True  # Assurez-vous que cela est correct pour vos données
+
+    # Calcul des coordonnées latitude/longitude à partir des coordonnées UTM
+    # Équations basées sur la projection UTM
+    a = 6378137.0  # Rayon équatorial en mètres
+    k0 = 0.9996    # Facteur d'échelle
+    e = 0.081819190842622  # Première excentricité
+
+    # Calcul zone, il peut être nécessaire de régler selon la zone
+    if northern_hemisphere:
+        n = northing
+    else:
+        n = northing - 10000000.0  # Ajuster pour l'hémisphère sud
+
+    # Calcul de latitude
+    M = n / k0
+    mu = M / (a * (1 - e**2 / 4 - 3 * e**4 / 64 - 5 * e**6 / 256))
+
+    # Calcul de latitude et longitude
+    e1 = (1 - math.sqrt(1 - e**2)) / (1 + math.sqrt(1 - e**2))  # Premier facteur d'excentricité
+    J1 = (3 * e1 / 2 - 27 * e1**3 / 32) * math.sin(2 * mu)
+    J2 = (21 * e1**2 / 16 - 55 * e1**4 / 32) * math.sin(4 * mu)
+    J3 = (151 * e1**3 / 96) * math.sin(6 * mu)
+    J4 = (1097 * e1**4 / 512) * math.sin(8 * mu)
+    lat = mu + J1 + J2 + J3 + J4
+
+    # Calcul longitude
+    C = e**2 * (math.cos(lat))**2 / (1 - e**2)
+    T = (math.tan(lat))**2
+    Q = (easting - 500000) / (a * k0)
+    lon = (zone_number * 6 - 183) + (Q / (1 - C)) * (1 / math.cos(lat))
+
+    return lat * (180 / math.pi), lon * (180 / math.pi), name  # Conversion radians à degrés
 
 def create_circle_kml(kml_obj, center_lat, center_lon, radius_m=3, name="Loc"):
     points = []
