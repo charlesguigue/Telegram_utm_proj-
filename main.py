@@ -72,6 +72,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         kml = simplekml.Kml()
         results = []
         count = 1
+        first_location = None
 
         for part in parts:
             coords = parse_utm(part)
@@ -80,13 +81,29 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 gmaps = f"https://www.google.com/maps?q={lat},{lon}"
                 name = f"Loc {count}"
 
-                results.append(f"📍 {name} → {gmaps}")
+                # Stockage de la première localisation valide trouvée
+                if not first_location:
+                    first_location = f"📍 {name} → {gmaps}"
                 create_diamond_kml(kml, lat, lon, name)
                 count += 1
-            else:
-                # Utiliser le texte comme nom s'il n'est pas une coordonnée
-                name = part.strip() or f"Loc {count}"
-                results.append(f"📍 {name} (no coordinates)")
+
+        if first_location:
+            results.append(first_location)
+        else:
+            await update.message.reply_text("❌ No valid UTM coordinates found.")
+            return
+
+        await update.message.reply_text("\n".join(results))
+
+        kml_path = "/tmp/locations.kml"
+        kml.save(kml_path)
+        await update.message.reply_document(open(kml_path, "rb"))
+
+    except Exception as e:
+        logging.exception("Processing error")
+        await update.message.reply_text(
+            "⚠️ An internal error occurred while processing your message."
+        )
 
         if not results:
             await update.message.reply_text("❌ No valid UTM coordinates found.")
