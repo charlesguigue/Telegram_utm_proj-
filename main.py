@@ -74,17 +74,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         count = 1
 
         for part in parts:
-    coords = parse_utm(part)
-    if not coords:
-        continue
+            coords = parse_utm(part)
+            if not coords:
+                continue
 
-    lat, lon = coords
-    gmaps = f"https://www.google.com/maps?q={lat},{lon}"  # Correction ici
-    name = f"Loc {count}"
+            lat, lon = coords
+            gmaps = f"https://www.google.com/maps?q={lat},{lon}"  # Correction ici
+            name = f"Loc {count}"
 
-    results.append(f"📍 {name} → {gmaps}")
-    create_diamond_kml(kml, lat, lon, name)
-    count += 1
+            results.append(f"📍 {name} → {gmaps}")
+            create_diamond_kml(kml, lat, lon, name)
+            count += 1
 
         if not results:
             await update.message.reply_text("❌ No valid UTM coordinates found.")
