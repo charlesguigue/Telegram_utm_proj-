@@ -66,47 +66,26 @@ def parse_utm(line):
 
     return lat * (180 / math.pi), lon * (180 / math.pi), name
 
-def create_circle_kml(kml_obj, center_lat, center_lon, radius_m=3, name="Loc"):
-    """Create a circle in a KML object."""
-    points = []
-    num_points = 72  # Smooth circle
+def parse_wgs84(line):
+    """Convert WGS84 coordinates to KML."""
+    m = re.search(r"(-?\d+\.\d+),\s*(-?\d+\.\d+)", line)
+    if not m:
+        return None
 
-    for i in range(num_points + 1):
-        angle = math.radians(i * (360 / num_points))
-        delta_lat = (radius_m / 111320) * math.cos(angle)
-        delta_lon = (radius_m / (111320 * math.cos(math.radians(center_lat)))) * math.sin(angle)
+    lat = float(m.group(1))
+    lon = float(m.group(2))
+    name = line.split('-')[0].strip() or "WGS84"
 
-        lat = center_lat + delta_lat
-        lon = center_lon + delta_lon
-        points.append((lon, lat))
+    return lat, lon, name
 
-    pol = kml_obj.newpolygon(name=name, outerboundaryis=points)
-    pol.style.linestyle.color = simplekml.Color.red
-    pol.style.linestyle.width = 2
-    pol.style.polystyle.color = simplekml.Color.changealphaint(165, simplekml.Color.red)
-    pol.style.polystyle.fill = 1
-    pol.style.polystyle.outline = 1
-
-def create_diamond_kml(kml_obj, center_lat, center_lon, size_m=3, name="Diamond"):
-    """Create a diamond shape in a KML object."""
-    dlat = size_m / 111320
-    dlon = size_m / (111320 * math.cos(math.radians(center_lat)))
-
-    points = [
-        (center_lon, center_lat + dlat),  # Top
-        (center_lon + dlon, center_lat),  # Right
-        (center_lon, center_lat - dlat),  # Bottom
-        (center_lon - dlon, center_lat),  # Left
-    ]
-
-    points.append(points[0])  # Close the diamond
-
-    pol = kml_obj.newpolygon(name=name, outerboundaryis=points)
-    pol.style.linestyle.color = simplekml.Color.blue
-    pol.style.linestyle.width = 2
-    pol.style.polystyle.color = simplekml.Color.changealphaint(165, simplekml.Color.blue)
-    pol.style.polystyle.fill = 1
-    pol.style.polystyle.outline = 1
+def create_kml(coords_list):
+    """Create KML file with diamond shapes for given coordinates."""
+    kml = simplekml.Kml()
+    for lat, lon, name in coords_list:
+        kml.newpoint(name=name, coords=[(lon, lat)])  # Add diamond shape
+    kml_file = "coordinates.kml"
+    kml.save(kml_file)
+    return kml_file
 
 # ================= HANDLERS =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -130,24 +109,39 @@ async def handle_option(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif user_choice == "Google Maps":
         await update.message.reply_text("Please send your Google Maps link or address.")
 
-async def handle_utm_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_coordinates(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
-    coords = parse_utm(text)
+    lines = text.splitlines()
+    results = []
+    coords_list = []
 
-    if not coords:
-        await update.message.reply_text("❌ Invalid UTM coordinates format. Please try again.")
-        return
+    for line in lines:
+        coords = parse_utm(line) or parse_wgs84(line)
 
-    lat, lon, name = coords
-    gmaps = f"https://www.google.com/maps?q={lat},{lon}"
-    await update.message.reply_text(f"📍 {name} → {gmaps}")
+        if not coords:
+            results.append(f"❌ Invalid coordinates for: {line}")
+            continue
+
+        lat, lon, name = coords
+        results.append(f"📍 {name} → [Google Maps link](https://www.google.com/maps?q={lat},{lon})")
+        coords_list.append((lat, lon, name))
+
+    # Create KML file if valid coordinates were found
+    if coords_list:
+        kml_file = create_kml(coords_list)
+        results.append(f"KML file created: [Download here]({kml_file})")
+    else:
+        results.append("No valid coordinates found.")
+
+    await update.message.reply_text("\n".join(results))
 
 # ================= MAIN =================
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_option))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex('^UTM$'), handle_utm_message))  # Corrected line
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex('^UTM$'), handle_coordinates))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex('^GWS84$'), handle_coordinates))
 
     logging.info("Bot started successfully")
     app.run_polling()
