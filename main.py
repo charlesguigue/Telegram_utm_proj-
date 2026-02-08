@@ -100,11 +100,11 @@ def generate_kml(points):
         '</Style>'
     ]
 
-    for i, (lat, lon) in enumerate(points, start=1):
+    for i, (name, (lat, lon)) in enumerate(points, start=1):
         coords = generate_shape(lat, lon)
         kml.append(f"""
         <Placemark>
-            <name>Location {i}</name>
+            <name>{name}</name>
             <styleUrl>#shapeStyle</styleUrl>
             <Polygon>
                 <outerBoundaryIs>
@@ -128,20 +128,21 @@ def generate_kml(points):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
 
-    matches = re.findall(r"(\d+[\/,]\d+)", text)
+    matches = re.findall(r"([א-ת0-9 ]+)\s*-\s*(\d+[\/,]\d+)", text)
+
     if not matches:
-        await update.message.reply_text("❌ No valid coordinates found.")
+        await update.message.reply_text("❌ Aucun point valide trouvé.")
         return
 
     points = []
     reply = []
 
-    for idx, m in enumerate(matches, start=1):
+    for idx, (name, m) in enumerate(matches, start=1):
         x, y = re.split("[/,]", m)
         lat = float(y) / 100000
         lon = float(x) / 100000
-        points.append((lat, lon))
-        reply.append(f"📍 Location {idx} -> https://maps.app.goo.gl/?q={lat},{lon}")
+        points.append((name if name.strip() else f"Location {idx}", (lat, lon)))
+        reply.append(f"📍 {name} -> https://www.google.com/maps?q={lat},{lon}")
 
     await update.message.reply_text("\n\n".join(reply))
 
@@ -159,11 +160,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN missing")
+        raise RuntimeError("BOT_TOKEN manquant")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    print("🤖 Bot started and running...")
+    print("🤖 Bot démarré et en cours d'exécution...")
     app.run_polling()
 
 if __name__ == "__main__":
